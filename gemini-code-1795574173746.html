@@ -1,0 +1,579 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Estudio 3D · Cubos 10×10 cm y 5×5 cm</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="canvas-container"></div>
+
+  <!-- Barra superior -->
+  <header class="top-bar">
+    <span class="brand">Escala 1:1 cm</span>
+    <span class="divider"></span>
+    <span class="stat">10×10 cm: <strong id="count-large">12</strong></span>
+    <span class="stat">5×5 cm: <strong id="count-small">24</strong></span>
+    <span class="divider"></span>
+    <span class="stat">Total: <strong id="count-total">36</strong></span>
+  </header>
+
+  <!-- Inspector flotante de pieza seleccionada -->
+  <div id="inspector-pill" class="inspector-pill">
+    <span id="sel-swatch" class="swatch-dot"></span>
+    <strong id="sel-label">Cubo 10×10×10 cm</strong>
+    <span id="sel-coords" class="coords">X: 0 cm · Y: 0 cm · Z: 0 cm</span>
+    <button id="btn-rotate" class="pill-btn" title="Rotar 90° (Tecla R)">Rotar 90°</button>
+    <button id="btn-delete-sel" class="pill-btn danger" title="Eliminar cubo (Supr)">Quitar</button>
+  </div>
+
+  <div class="hint">Clic y arrastra un cubo para moverlo · Clic fuera para orbitar cámara · Rueda para zoom</div>
+
+  <!-- Barra inferior -->
+  <footer class="bottom-bar">
+    <div class="group" aria-label="Tamaño a añadir">
+      <button class="seg-btn active" data-size="10">10×10 cm</button>
+      <button class="seg-btn" data-size="5">5×5 cm</button>
+    </div>
+
+    <div class="group" aria-label="Color a añadir">
+      <button class="color-btn active" data-color="cafe" style="background:#6B4423" title="Café"></button>
+      <button class="color-btn" data-color="naranja" style="background:#E86A17" title="Naranja"></button>
+      <button class="color-btn" data-color="amarillo" style="background:#F2B705" title="Amarillo"></button>
+    </div>
+
+    <button id="btn-add" class="action-btn primary">+ Añadir</button>
+    <button id="btn-remove" class="action-btn">− Quitar</button>
+
+    <span class="divider"></span>
+
+    <button id="btn-snap" class="action-btn toggle-on" title="Ajustar movimiento a cuadrícula de 1 cm">Imán 1 cm</button>
+    <button id="btn-random" class="action-btn">Aleatorio</button>
+    <button id="btn-reset" class="action-btn">Restaurar (36)</button>
+  </footer>
+
+  <!-- Three.js r128 y OrbitControls desde CDN -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+
+  <script>
+    (function () {
+      // --- CONFIGURACIÓN DE ESCALA EXACTA: 1 unidad Three.js = 1 centímetro ---
+      const BOARD_SIZE = 120; // 120 cm x 120 cm
+      const HALF_BOARD = BOARD_SIZE / 2;
+
+      const PALETTE = {
+        cafe: { name: 'Café', hex: '#6B4423', value: 0x6B4423 },
+        naranja: { name: 'Naranja', hex: '#E86A17', value: 0xE86A17 },
+        amarillo: { name: 'Amarillo', hex: '#F2B705', value: 0xF2B705 }
+      };
+
+      let selectedSizeToAdd = 10;
+      let selectedColorToAdd = 'cafe';
+      let snapEnabled = true;
+
+      // Lista de mallas de cubos activos
+      const cubes = [];
+      let selectedCube = null;
+      let draggedCube = null;
+      const dragOffset = new THREE.Vector3();
+      const dragPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+
+      // --- ESCENA, CÁMARA Y RENDERIZADOR ---
+      const container = document.getElementById('canvas-container');
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0xf4f3ef);
+
+      const camera = new THREE.PerspectiveCamera(42, window.innerWidth / window.innerHeight, 0.5, 1000);
+      camera.position.set(0, 92, 118);
+
+      const renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      renderer.shadowMap.enabled = true;
+      renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+      container.appendChild(renderer.domElement);
+
+      const controls = new THREE.OrbitControls(camera, renderer.domElement);
+      controls.enableDamping = true;
+      controls.dampingFactor = 0.07;
+      controls.maxPolarAngle = Math.PI / 2 - 0.03;
+      controls.minDistance = 20;
+      controls.maxDistance = 260;
+      controls.target.set(0, 4, 0);
+
+      // --- ILUMINACIÓN ---
+      const ambientLight = new THREE.AmbientLight(0xffffff, 0.65);
+      scene.add(ambientLight);
+
+      const dirLight = new THREE.DirectionalLight(0xfffdf8, 0.72);
+      dirLight.position.set(55, 110, 65);
+      dirLight.castShadow = true;
+      dirLight.shadow.mapSize.width = 2048;
+      dirLight.shadow.mapSize.height = 2048;
+      dirLight.shadow.camera.near = 10;
+      dirLight.shadow.camera.far = 260;
+      const d = 80;
+      dirLight.shadow.camera.left = -d;
+      dirLight.shadow.camera.right = d;
+      dirLight.shadow.camera.top = d;
+      dirLight.shadow.camera.bottom = -d;
+      dirLight.shadow.bias = -0.0005;
+      scene.add(dirLight);
+
+      const fillLight = new THREE.DirectionalLight(0xeef3ff, 0.25);
+      fillLight.position.set(-60, 50, -50);
+      scene.add(fillLight);
+
+      // --- BASE CALIBRADA EN CENTÍMETROS (120 x 120 cm) ---
+      function buildCalibratedBoard() {
+        const boardGroup = new THREE.Group();
+
+        // Superficie de la base
+        const baseGeo = new THREE.BoxGeometry(BOARD_SIZE, 1.5, BOARD_SIZE);
+        const baseMat = new THREE.MeshStandardMaterial({
+          color: 0xffffff,
+          roughness: 0.9,
+          metalness: 0.02
+        });
+        const baseMesh = new THREE.Mesh(baseGeo, baseMat);
+        baseMesh.position.y = -0.75;
+        baseMesh.receiveShadow = true;
+        boardGroup.add(baseMesh);
+
+        // Cuadrícula fina cada 1 cm
+        const fineGrid = new THREE.GridHelper(BOARD_SIZE, 120, 0xdedbd4, 0xedeae4);
+        fineGrid.position.y = 0.01;
+        boardGroup.add(fineGrid);
+
+        // Cuadrícula principal cada 10 cm (coincide con el cubo grande)
+        const mainGrid = new THREE.GridHelper(BOARD_SIZE, 12, 0xbdb9b0, 0xc9c5bc);
+        mainGrid.position.y = 0.02;
+        boardGroup.add(mainGrid);
+
+        // Regla graduada frontal en centímetros (0 a 120 cm)
+        const rulerCanvas = document.createElement('canvas');
+        rulerCanvas.width = 2048;
+        rulerCanvas.height = 96;
+        const ctx = rulerCanvas.getContext('2d');
+        ctx.fillStyle = '#f8f7f3';
+        ctx.fillRect(0, 0, rulerCanvas.width, rulerCanvas.height);
+
+        ctx.strokeStyle = '#6e6a63';
+        ctx.fillStyle = '#3d3b37';
+        ctx.font = '600 26px -apple-system, BlinkMacSystemFont, sans-serif';
+        ctx.textAlign = 'center';
+
+        for (let cm = 0; cm <= BOARD_SIZE; cm++) {
+          const x = (cm / BOARD_SIZE) * rulerCanvas.width;
+          const isTen = cm % 10 === 0;
+          const isFive = cm % 5 === 0;
+          const tickH = isTen ? 34 : isFive ? 22 : 12;
+
+          ctx.lineWidth = isTen ? 3 : 1.5;
+          ctx.beginPath();
+          ctx.moveTo(x, 0);
+          ctx.lineTo(x, tickH);
+          ctx.stroke();
+
+          if (isTen && cm > 0 && cm < BOARD_SIZE) {
+            ctx.fillText(cm + ' cm', x, 72);
+          }
+        }
+
+        const rulerTex = new THREE.CanvasTexture(rulerCanvas);
+        rulerTex.anisotropy = 8;
+        const rulerGeo = new THREE.PlaneGeometry(BOARD_SIZE, 5.5);
+        const rulerMat = new THREE.MeshBasicMaterial({ map: rulerTex });
+        const rulerMesh = new THREE.Mesh(rulerGeo, rulerMat);
+        rulerMesh.rotation.x = -Math.PI / 2;
+        rulerMesh.position.set(0, 0.03, HALF_BOARD + 2.75);
+        boardGroup.add(rulerMesh);
+
+        scene.add(boardGroup);
+      }
+
+      buildCalibratedBoard();
+
+      // --- CREACIÓN DE CUBOS CON MEDIDAS EXACTAS ---
+      const geoCache = {
+        10: new THREE.BoxGeometry(10, 10, 10),
+        5: new THREE.BoxGeometry(5, 5, 5)
+      };
+
+      const edgeGeoCache = {
+        10: new THREE.EdgesGeometry(geoCache[10]),
+        5: new THREE.EdgesGeometry(geoCache[5])
+      };
+
+      function createCube(sizeCm, colorKey, x, y, z) {
+        const colorInfo = PALETTE[colorKey];
+        const material = new THREE.MeshStandardMaterial({
+          color: colorInfo.value,
+          roughness: 0.45,
+          metalness: 0.04
+        });
+
+        const mesh = new THREE.Mesh(geoCache[sizeCm], material);
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+
+        // Contorno sutil para distinguir piezas apiladas
+        const edgeMat = new THREE.LineBasicMaterial({
+          color: 0x1f1e1c,
+          transparent: true,
+          opacity: 0.22
+        });
+        const edges = new THREE.LineSegments(edgeGeoCache[sizeCm], edgeMat);
+        edges.raycast = () => {};
+        mesh.add(edges);
+
+        mesh.userData = {
+          size: sizeCm,
+          colorKey: colorKey,
+          colorName: colorInfo.name,
+          colorHex: colorInfo.hex,
+          edges: edges
+        };
+
+        mesh.position.set(x, y, z);
+        scene.add(mesh);
+        cubes.push(mesh);
+        updateCounters();
+        return mesh;
+      }
+
+      function removeCube(cube) {
+        if (!cube) return;
+        const idx = cubes.indexOf(cube);
+        if (idx !== -1) {
+          cubes.splice(idx, 1);
+        }
+        if (selectedCube === cube) {
+          setSelectedCube(null);
+        }
+        if (draggedCube === cube) {
+          draggedCube = null;
+        }
+        scene.remove(cube);
+        cube.material.dispose();
+        updateCounters();
+      }
+
+      // --- LÓGICA DE AJUSTE DE POSICIÓN Y APILADO SOLO PARA EL CUBO ACTIVO ---
+      function clampAndSnapHorizontal(cube, rawX, rawZ) {
+        const half = cube.userData.size / 2;
+        const limit = HALF_BOARD - half;
+
+        let x = Math.max(-limit, Math.min(limit, rawX));
+        let z = Math.max(-limit, Math.min(limit, rawZ));
+
+        if (snapEnabled) {
+          const cornerX = Math.round(x - half);
+          const cornerZ = Math.round(z - half);
+          x = Math.max(-limit, Math.min(limit, cornerX + half));
+          z = Math.max(-limit, Math.min(limit, cornerZ + half));
+        }
+
+        return { x, z };
+      }
+
+      function computeSupportY(movingCube, x, z) {
+        const half = movingCube.userData.size / 2;
+        const eps = 0.05;
+        let maxTopY = 0;
+
+        for (let i = 0; i < cubes.length; i++) {
+          const other = cubes[i];
+          if (other === movingCube) continue;
+
+          const otherHalf = other.userData.size / 2;
+          const overlapX = Math.abs(x - other.position.x) < (half + otherHalf - eps);
+          const overlapZ = Math.abs(z - other.position.z) < (half + otherHalf - eps);
+
+          if (overlapX && overlapZ) {
+            const otherTop = other.position.y + otherHalf;
+            if (otherTop > maxTopY) {
+              maxTopY = otherTop;
+            }
+          }
+        }
+
+        return maxTopY + half;
+      }
+
+      // --- DISTRIBUCIÓN INICIAL: 12 GRANDES (4-4-4) Y 24 PEQUEÑOS (8-8-8) ---
+      function loadDefaultArrangement() {
+        while (cubes.length > 0) {
+          removeCube(cubes[cubes.length - 1]);
+        }
+        setSelectedCube(null);
+
+        const order = ['cafe', 'naranja', 'amarillo'];
+
+        let largeIdx = 0;
+        order.forEach((colorKey) => {
+          for (let i = 0; i < 4; i++) {
+            const x = -55 + largeIdx * 10;
+            const z = -45;
+            createCube(10, colorKey, x, 5, z);
+            largeIdx++;
+          }
+        });
+
+        let smallIdx = 0;
+        order.forEach((colorKey) => {
+          for (let i = 0; i < 8; i++) {
+            const col = smallIdx % 12;
+            const row = Math.floor(smallIdx / 12);
+            const x = -55 + col * 10;
+            const z = -27.5 + row * 10;
+            createCube(5, colorKey, x, 2.5, z);
+            smallIdx++;
+          }
+        });
+      }
+
+      // --- DISTRIBUCIÓN ALEATORIA ---
+      function randomizeCubes() {
+        if (cubes.length === 0) return;
+        setSelectedCube(null);
+
+        const shuffled = [...cubes].sort(() => Math.random() - 0.5);
+        cubes.length = 0;
+
+        shuffled.forEach((cube) => {
+          const size = cube.userData.size;
+          const half = size / 2;
+          const maxCell = Math.floor((BOARD_SIZE - size) / 5);
+          const rx = -HALF_BOARD + half + Math.floor(Math.random() * (maxCell + 1)) * 5;
+          const rz = -HALF_BOARD + half + Math.floor(Math.random() * (maxCell + 1)) * 5;
+          const ry = computeSupportY(cube, rx, rz);
+
+          cube.position.set(rx, ry, rz);
+          cube.rotation.y = (Math.floor(Math.random() * 4) * Math.PI) / 2;
+          cubes.push(cube);
+        });
+      }
+
+      // --- INTERACCIÓN POR PUNTERO ---
+      const raycaster = new THREE.Raycaster();
+      const pointer = new THREE.Vector2();
+      const planeHit = new THREE.Vector3();
+
+      function updatePointerNDC(event) {
+        const rect = renderer.domElement.getBoundingClientRect();
+        pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+        pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+      }
+
+      function setSelectedCube(cube) {
+        if (selectedCube && selectedCube !== cube) {
+          selectedCube.material.emissive.setHex(0x000000);
+          selectedCube.userData.edges.material.color.setHex(0x1f1e1c);
+          selectedCube.userData.edges.material.opacity = 0.22;
+        }
+
+        selectedCube = cube;
+
+        const pill = document.getElementById('inspector-pill');
+        if (selectedCube) {
+          selectedCube.material.emissive.setHex(0x222222);
+          selectedCube.userData.edges.material.color.setHex(0xffffff);
+          selectedCube.userData.edges.material.opacity = 0.9;
+
+          const { size, colorName, colorHex } = selectedCube.userData;
+          document.getElementById('sel-swatch').style.backgroundColor = colorHex;
+          document.getElementById('sel-label').textContent = `${colorName} · ${size}×${size}×${size} cm`;
+          updateInspectorCoords();
+          pill.classList.add('visible');
+        } else {
+          pill.classList.remove('visible');
+        }
+      }
+
+      function updateInspectorCoords() {
+        if (!selectedCube) return;
+        const half = selectedCube.userData.size / 2;
+        const cx = Math.round((selectedCube.position.x + HALF_BOARD) * 10) / 10;
+        const cy = Math.round((selectedCube.position.y - half) * 10) / 10;
+        const cz = Math.round((selectedCube.position.z + HALF_BOARD) * 10) / 10;
+        document.getElementById('sel-coords').textContent = `X: ${cx} cm · Y: ${cy} cm · Z: ${cz} cm`;
+      }
+
+      renderer.domElement.addEventListener('pointerdown', (event) => {
+        if (event.button !== 0) return;
+
+        updatePointerNDC(event);
+        raycaster.setFromCamera(pointer, camera);
+
+        const hits = raycaster.intersectObjects(cubes, false);
+
+        if (hits.length > 0) {
+          const hitCube = hits[0].object;
+          controls.enabled = false;
+
+          setSelectedCube(hitCube);
+          draggedCube = hitCube;
+
+          dragPlane.setFromNormalAndCoplanarPoint(
+            new THREE.Vector3(0, 1, 0),
+            hitCube.position
+          );
+
+          if (raycaster.ray.intersectPlane(dragPlane, planeHit)) {
+            dragOffset.copy(hitCube.position).sub(planeHit);
+          } else {
+            dragOffset.set(0, 0, 0);
+          }
+
+          renderer.domElement.style.cursor = 'grabbing';
+        } else {
+          setSelectedCube(null);
+          draggedCube = null;
+          controls.enabled = true;
+        }
+      });
+
+      window.addEventListener('pointermove', (event) => {
+        updatePointerNDC(event);
+        raycaster.setFromCamera(pointer, camera);
+
+        if (draggedCube) {
+          if (raycaster.ray.intersectPlane(dragPlane, planeHit)) {
+            const targetX = planeHit.x + dragOffset.x;
+            const targetZ = planeHit.z + dragOffset.z;
+
+            const { x, z } = clampAndSnapHorizontal(draggedCube, targetX, targetZ);
+            const y = computeSupportY(draggedCube, x, z);
+
+            draggedCube.position.set(x, y, z);
+            updateInspectorCoords();
+          }
+          return;
+        }
+
+        const hits = raycaster.intersectObjects(cubes, false);
+        renderer.domElement.style.cursor = hits.length > 0 ? 'grab' : 'default';
+      });
+
+      window.addEventListener('pointerup', () => {
+        if (draggedCube) {
+          draggedCube = null;
+          renderer.domElement.style.cursor = 'grab';
+        }
+        controls.enabled = true;
+      });
+
+      // --- CONTROLES DE INTERFAZ ---
+      function updateCounters() {
+        let large = 0;
+        let small = 0;
+        for (let i = 0; i < cubes.length; i++) {
+          if (cubes[i].userData.size === 10) large++;
+          else small++;
+        }
+        document.getElementById('count-large').textContent = large;
+        document.getElementById('count-small').textContent = small;
+        document.getElementById('count-total').textContent = cubes.length;
+      }
+
+      document.querySelectorAll('.seg-btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          document.querySelectorAll('.seg-btn').forEach((b) => b.classList.remove('active'));
+          btn.classList.add('active');
+          selectedSizeToAdd = parseInt(btn.dataset.size, 10);
+        });
+      });
+
+      document.querySelectorAll('.color-btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          document.querySelectorAll('.color-btn').forEach((b) => b.classList.remove('active'));
+          btn.classList.add('active');
+          selectedColorToAdd = btn.dataset.color;
+        });
+      });
+
+      document.getElementById('btn-add').addEventListener('click', () => {
+        const size = selectedSizeToAdd;
+        const half = size / 2;
+        let spawnX = 0;
+        let spawnZ = 20;
+        const candidates = [
+          [0, 20], [10, 20], [-10, 20], [20, 20], [-20, 20],
+          [0, 30], [10, 30], [-10, 30], [0, 10], [10, 10], [-10, 10]
+        ];
+
+        for (const [cx, cz] of candidates) {
+          const { x, z } = clampAndSnapHorizontal({ userData: { size } }, cx, cz);
+          const testY = computeSupportY({ userData: { size } }, x, z);
+          if (testY === half) {
+            spawnX = x;
+            spawnZ = z;
+            break;
+          }
+        }
+
+        const finalPos = clampAndSnapHorizontal({ userData: { size } }, spawnX, spawnZ);
+        const finalY = computeSupportY({ userData: { size } }, finalPos.x, finalPos.z);
+        const newCube = createCube(size, selectedColorToAdd, finalPos.x, finalY, finalPos.z);
+        setSelectedCube(newCube);
+      });
+
+      document.getElementById('btn-remove').addEventListener('click', () => {
+        if (selectedCube) {
+          removeCube(selectedCube);
+        } else if (cubes.length > 0) {
+          removeCube(cubes[cubes.length - 1]);
+        }
+      });
+
+      document.getElementById('btn-delete-sel').addEventListener('click', () => {
+        if (selectedCube) removeCube(selectedCube);
+      });
+
+      document.getElementById('btn-rotate').addEventListener('click', () => {
+        if (!selectedCube) return;
+        selectedCube.rotation.y += Math.PI / 2;
+      });
+
+      const snapBtn = document.getElementById('btn-snap');
+      snapBtn.addEventListener('click', () => {
+        snapEnabled = !snapEnabled;
+        snapBtn.classList.toggle('toggle-on', snapEnabled);
+      });
+
+      document.getElementById('btn-random').addEventListener('click', randomizeCubes);
+      document.getElementById('btn-reset').addEventListener('click', loadDefaultArrangement);
+
+      window.addEventListener('keydown', (e) => {
+        if (!selectedCube) return;
+        if (e.key === 'r' || e.key === 'R') {
+          selectedCube.rotation.y += Math.PI / 2;
+        } else if (e.key === 'Delete' || e.key === 'Backspace') {
+          removeCube(selectedCube);
+        } else if (e.key === 'Escape') {
+          setSelectedCube(null);
+        }
+      });
+
+      window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+      });
+
+      loadDefaultArrangement();
+
+      function animate() {
+        requestAnimationFrame(animate);
+        controls.update();
+        renderer.render(scene, camera);
+      }
+
+      animate();
+    })();
+  </script>
+</body>
+</html>
